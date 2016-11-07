@@ -1,3 +1,12 @@
+#include <Bridge.h>
+#include <Console.h>
+#include <FileIO.h>
+#include <HttpClient.h>
+#include <Mailbox.h>
+#include <Process.h>
+#include <YunClient.h>
+#include <YunServer.h>
+
 /*   This sketch allows you to emulate a Somfy RTS or Simu HZ remote.
    If you want to learn more about the Somfy RTS protocol, check out https://pushstack.wordpress.com/somfy-rts-protocol/
    
@@ -26,55 +35,99 @@
 #define STOP 0x1
 #define BAS 0x4
 #define PROG 0x8
-#define EEPROM_ADDRESS 0
 
-#define REMOTE 0x121300    //<-- Change it!
+#define NEW_ROLLING_CODE 0x101
 
-unsigned int newRollingCode = 101;       //<-- Change it!
-unsigned int rollingCode = 0;
+YunServer server;
+
+typedef struct Remote {
+  unsigned long remoteNumber;
+  unsigned int rollingCode;
+} Remote;
+
+Remote currentRemote;
+
+int currentRemoteNumber = 0;
+
 byte frame[7];
 byte checksum;
 
 void BuildFrame(byte *frame, byte button);
 void SendCommand(byte *frame, byte sync);
+void InitializeRemote();
+void LoadRemote();
+void SaveRemote();
 
 
 void setup() {
   Serial.begin(115200);
-  DDRD |= 1<<PORT_TX; // Pin 5 an output
-  PORTD &= !(1<<PORT_TX); // Pin 5 LOW
-
-  if (EEPROM.get(EEPROM_ADDRESS, rollingCode) < newRollingCode) {
-    EEPROM.put(EEPROM_ADDRESS, newRollingCode);
-  }
-  Serial.print("Simulated remote number : "); Serial.println(REMOTE, HEX);
-  Serial.print("Current rolling code    : "); Serial.println(rollingCode);
+  pinMode(PORT_TX, OUTPUT); // Pin 5 an output
+  digitalWrite(PORT_TX, 0); // Pin 5 LOW
+  
+  // Initialize the bridge
+  Serial.println("Initializing Bridge");
+  pinMode(13, OUTPUT);
+  digitalWrite(13, LOW);
+  Bridge.begin();
+  digitalWrite(13, HIGH);
+  Serial.println("Bridge Initialized");
+  
+  server.listenOnLocalhost();
+  server.begin();
+  
+  randomSeed(analogRead(0));
 }
 
 void loop() {
+  YunClient client = server.accept();
+  
+  if (client) {
+    String command = client.readStringUntil('/');
+    ExecuteCommand(command[0]);
+    client.stop();
+  }
+  
   if (Serial.available() > 0) {
     char serie = (char)Serial.read();
-    Serial.println("");
-//    Serial.print("Remote : "); Serial.println(REMOTE, HEX);
-    if(serie == 'm'||serie == 'u'||serie == 'h') {
+    ExecuteCommand(serie);
+  }
+  
+  delay(50);
+}
+
+void ExecuteCommand(char command)
+{
+  Serial.println("");
+    if(command == 'm'||command == 'u'||command == 'h') {
       Serial.println("Monte"); // Somfy is a French company, after all.
       BuildFrame(frame, HAUT);
     }
-    else if(serie == 's') {
+    else if(command == 's') {
       Serial.println("Stop");
       BuildFrame(frame, STOP);
     }
-    else if(serie == 'b'||serie == 'd') {
+    else if(command == 'b'||command == 'd') {
       Serial.println("Descend");
       BuildFrame(frame, BAS);
     }
-    else if(serie == 'p') {
+    else if(command == 'p') {
       Serial.println("Prog");
       BuildFrame(frame, PROG);
     }
+    else if(command >= '0' && command <= '9') {
+      currentRemoteNumber = command - '0';
+      
+      EEPROM.get(currentRemoteNumber * sizeof(Remote), currentRemote);
+      if (currentRemote.rollingCode < NEW_ROLLING_CODE) {
+        InitializeRemote();
+      }
+      
+      Serial.println("Changed to remote #:");
+      Serial.println(currentRemoteNumber);
+    }
     else {
       Serial.println("Custom code");
-      BuildFrame(frame, serie);
+      BuildFrame(frame, command);
     }
 
     Serial.println("");
@@ -82,20 +135,19 @@ void loop() {
     for(int i = 0; i<2; i++) {
       SendCommand(frame, 7);
     }
-  }
 }
 
 
 void BuildFrame(byte *frame, byte button) {
-  unsigned int code;
-  EEPROM.get(EEPROM_ADDRESS, code);
+  unsigned int code = currentRemote.rollingCode;
+  unsigned long remote = currentRemote.remoteNumber;
   frame[0] = 0xA7; // Encryption key. Doesn't matter much
   frame[1] = button << 4;  // Which button did  you press? The 4 LSB will be the checksum
   frame[2] = code >> 8;    // Rolling code (big endian)
   frame[3] = code;         // Rolling code
-  frame[4] = REMOTE >> 16; // Remote address
-  frame[5] = REMOTE >>  8; // Remote address
-  frame[6] = REMOTE;       // Remote address
+  frame[4] = remote >> 16; // Remote address
+  frame[5] = remote >>  8; // Remote address
+  frame[6] = remote;       // Remote address
 
   Serial.print("Frame         : ");
   for(byte i = 0; i < 7; i++) {
@@ -140,51 +192,67 @@ void BuildFrame(byte *frame, byte button) {
   }
   Serial.println("");
   Serial.print("Rolling Code  : "); Serial.println(code);
-  EEPROM.put(EEPROM_ADDRESS, code + 1); //  We store the value of the rolling code in the
-                                        // EEPROM. It should take up to 2 adresses but the
-                                        // Arduino function takes care of it.
+  currentRemote.rollingCode++;
+  SaveRemote();
 }
 
 void SendCommand(byte *frame, byte sync) {
   if(sync == 2) { // Only with the first frame.
   //Wake-up pulse & Silence
-    PORTD |= 1<<PORT_TX;
+    digitalWrite(PORT_TX, 1);
     delayMicroseconds(9415);
-    PORTD &= !(1<<PORT_TX);
+    digitalWrite(PORT_TX, 0);
     delayMicroseconds(89565);
   }
 
 // Hardware sync: two sync for the first frame, seven for the following ones.
   for (int i = 0; i < sync; i++) {
-    PORTD |= 1<<PORT_TX;
+    digitalWrite(PORT_TX, 1);
     delayMicroseconds(4*SYMBOL);
-    PORTD &= !(1<<PORT_TX);
+    digitalWrite(PORT_TX, 0);
     delayMicroseconds(4*SYMBOL);
   }
 
 // Software sync
-  PORTD |= 1<<PORT_TX;
+  digitalWrite(PORT_TX, 1);
   delayMicroseconds(4550);
-  PORTD &= !(1<<PORT_TX);
+  digitalWrite(PORT_TX, 0);
   delayMicroseconds(SYMBOL);
   
   
 //Data: bits are sent one by one, starting with the MSB.
   for(byte i = 0; i < 56; i++) {
     if(((frame[i/8] >> (7 - (i%8))) & 1) == 1) {
-      PORTD &= !(1<<PORT_TX);
+      digitalWrite(PORT_TX, 0);
       delayMicroseconds(SYMBOL);
-      PORTD ^= 1<<5;
+      digitalWrite(PORT_TX, 1);
       delayMicroseconds(SYMBOL);
     }
     else {
-      PORTD |= (1<<PORT_TX);
+      digitalWrite(PORT_TX, 1);
       delayMicroseconds(SYMBOL);
-      PORTD ^= 1<<5;
+      digitalWrite(PORT_TX, 0);
       delayMicroseconds(SYMBOL);
     }
   }
   
-  PORTD &= !(1<<PORT_TX);
+  digitalWrite(PORT_TX, 0);
   delayMicroseconds(30415); // Inter-frame silence
+}
+
+void InitializeRemote()
+{
+  currentRemote.rollingCode = NEW_ROLLING_CODE;
+  currentRemote.remoteNumber = random(0xFFFFFF);
+  SaveRemote();
+}
+
+void LoadRemote()
+{
+  EEPROM.put(currentRemoteNumber * sizeof(Remote), currentRemote);
+}
+
+void SaveRemote()
+{
+  EEPROM.get(currentRemoteNumber * sizeof(Remote), currentRemote);
 }
