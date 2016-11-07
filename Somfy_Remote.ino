@@ -61,11 +61,12 @@ void SaveRemote();
 
 void setup() {
   Serial.begin(115200);
-  pinMode(PORT_TX, OUTPUT); // Pin 5 an output
-  digitalWrite(PORT_TX, 0); // Pin 5 LOW
+  pinMode(PORT_TX, OUTPUT);
+  digitalWrite(PORT_TX, LOW);
   
   // Initialize the bridge
   Serial.println("Initializing Bridge");
+  // Pin 13 typically has an LED attached
   pinMode(13, OUTPUT);
   digitalWrite(13, LOW);
   Bridge.begin();
@@ -199,44 +200,44 @@ void BuildFrame(byte *frame, byte button) {
 void SendCommand(byte *frame, byte sync) {
   if(sync == 2) { // Only with the first frame.
   //Wake-up pulse & Silence
-    digitalWrite(PORT_TX, 1);
+    digitalWrite(PORT_TX, HIGH);
     delayMicroseconds(9415);
-    digitalWrite(PORT_TX, 0);
+    digitalWrite(PORT_TX, LOW);
     delayMicroseconds(89565);
   }
 
 // Hardware sync: two sync for the first frame, seven for the following ones.
   for (int i = 0; i < sync; i++) {
-    digitalWrite(PORT_TX, 1);
+    digitalWrite(PORT_TX, HIGH);
     delayMicroseconds(4*SYMBOL);
-    digitalWrite(PORT_TX, 0);
+    digitalWrite(PORT_TX, LOW);
     delayMicroseconds(4*SYMBOL);
   }
 
 // Software sync
-  digitalWrite(PORT_TX, 1);
+  digitalWrite(PORT_TX, HIGH);
   delayMicroseconds(4550);
-  digitalWrite(PORT_TX, 0);
+  digitalWrite(PORT_TX, LOW);
   delayMicroseconds(SYMBOL);
   
   
 //Data: bits are sent one by one, starting with the MSB.
   for(byte i = 0; i < 56; i++) {
     if(((frame[i/8] >> (7 - (i%8))) & 1) == 1) {
-      digitalWrite(PORT_TX, 0);
+      digitalWrite(PORT_TX, LOW);
       delayMicroseconds(SYMBOL);
-      digitalWrite(PORT_TX, 1);
+      digitalWrite(PORT_TX, HIGH);
       delayMicroseconds(SYMBOL);
     }
     else {
-      digitalWrite(PORT_TX, 1);
+      digitalWrite(PORT_TX, HIGH);
       delayMicroseconds(SYMBOL);
-      digitalWrite(PORT_TX, 0);
+      digitalWrite(PORT_TX, LOW);
       delayMicroseconds(SYMBOL);
     }
   }
   
-  digitalWrite(PORT_TX, 0);
+  digitalWrite(PORT_TX, LOW);
   delayMicroseconds(30415); // Inter-frame silence
 }
 
