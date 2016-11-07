@@ -129,7 +129,7 @@ void ExecuteCommand(char command)
       
       InitializeRemoteIfNeeded();
       
-      Serial.println("Changed to remote #:");
+      Serial.print("Changed to remote #");
       Serial.println(currentRemoteNumber);
     }
     else {
