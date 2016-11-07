@@ -54,6 +54,7 @@ byte checksum;
 
 void BuildFrame(byte *frame, byte button);
 void SendCommand(byte *frame, byte sync);
+void InitializeRemoteIfNeeded();
 void InitializeRemote();
 void LoadRemote();
 void SaveRemote();
@@ -83,8 +84,16 @@ void loop() {
   YunClient client = server.accept();
   
   if (client) {
-    String command = client.readStringUntil('/');
-    ExecuteCommand(command[0]);
+    Serial.println("Client conntected");
+    currentRemoteNumber = client.parseInt();
+    InitializeRemoteIfNeeded();
+    
+    if (client.read() == '/') {
+      String command = client.readStringUntil('\r');
+      Serial.print("Command received: ");
+      Serial.println(command);
+      ExecuteCommand(command[0]);
+    }
     client.stop();
   }
   
@@ -118,17 +127,13 @@ void ExecuteCommand(char command)
     else if(command >= '0' && command <= '9') {
       currentRemoteNumber = command - '0';
       
-      EEPROM.get(currentRemoteNumber * sizeof(Remote), currentRemote);
-      if (currentRemote.rollingCode < NEW_ROLLING_CODE) {
-        InitializeRemote();
-      }
+      InitializeRemoteIfNeeded();
       
       Serial.println("Changed to remote #:");
       Serial.println(currentRemoteNumber);
     }
     else {
-      Serial.println("Custom code");
-      BuildFrame(frame, command);
+      return;
     }
 
     Serial.println("");
@@ -241,19 +246,32 @@ void SendCommand(byte *frame, byte sync) {
   delayMicroseconds(30415); // Inter-frame silence
 }
 
+void InitializeRemoteIfNeeded() {
+  LoadRemote();
+  if (currentRemote.rollingCode < NEW_ROLLING_CODE) {
+    Serial.print("Initialization needed, current code: ");
+    Serial.println(currentRemote.rollingCode);
+    InitializeRemote();
+  }
+}
+
 void InitializeRemote()
 {
+  Serial.print("Initializing remote #");
+  Serial.println(currentRemoteNumber);
   currentRemote.rollingCode = NEW_ROLLING_CODE;
   currentRemote.remoteNumber = random(0xFFFFFF);
   SaveRemote();
 }
 
-void LoadRemote()
-{
-  EEPROM.put(currentRemoteNumber * sizeof(Remote), currentRemote);
+void LoadRemote() {
+  Serial.print("Loading remote #");
+  Serial.println(currentRemoteNumber);
+  EEPROM.get(currentRemoteNumber * sizeof(Remote), currentRemote);
 }
 
-void SaveRemote()
-{
-  EEPROM.get(currentRemoteNumber * sizeof(Remote), currentRemote);
+void SaveRemote() {
+  Serial.print("Saving remote #");
+  Serial.println(currentRemoteNumber);
+  EEPROM.put(currentRemoteNumber * sizeof(Remote), currentRemote);
 }
